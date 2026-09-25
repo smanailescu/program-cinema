@@ -2,11 +2,7 @@ import streamlit as st
 import mysql.connector
 import random
 import time
-import io
-from datetime import datetime, timedelta, date
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide", page_title="Panou Control Manager")
 
@@ -15,14 +11,8 @@ if "manager_logat" not in st.session_state:
 if "id_angajat_de_editat" not in st.session_state:
     st.session_state.id_angajat_de_editat = None
 
-TRADUCERE_ZILE = {
-    'Monday': 'Luni', 'Tuesday': 'Marti', 'Wednesday': 'Miercuri',
-    'Thursday': 'Joi', 'Friday': 'Vineri', 'Saturday': 'Sambata', 'Sunday': 'Duminica'
-}
-
-
 def get_conexiune():
-    # Dacă aplicația este urcată online, ia datele din Cloud:
+    # Conectare Cloud (Streamlit Secrets)
     try:
         if "DB_HOST" in st.secrets:
             return mysql.connector.connect(
@@ -35,7 +25,7 @@ def get_conexiune():
     except Exception:
         pass
 
-    # Altfel, dacă o rulezi de pe PC-ul tău, se conectează automat la XAMPP:
+    # Conectare locală (XAMPP)
     return mysql.connector.connect(
         host="localhost",
         user="root",
@@ -43,58 +33,17 @@ def get_conexiune():
         database="nume_angajati"
     )
 
-
-def normalizeaza_text(txt):
-    if not txt:
-        return ""
-    return (
-        txt.strip().lower()
-        .replace("ă", "a").replace("â", "a")
-        .replace("î", "i").replace("ș", "s").replace("ş", "s")
-        .replace("ț", "t").replace("ţ", "t")
-    )
-
-
-# Verifică STRICT dacă abilitățile angajatului corespund cu departamentul cerut în șablon
-def are_abilitate(dep_necesar, deps_angajat_str):
-    if not deps_angajat_str:
-        return False
-    deps = [normalizeaza_text(d) for d in deps_angajat_str.split(",") if d.strip()]
-    dep_n = normalizeaza_text(dep_necesar)
-
-    if "vip" in dep_n:
-        return any("vip" in d for d in deps)
-    elif "bar" in dep_n:
-        return any("bar" in d for d in deps)
-    elif "plasator" in dep_n:
-        return any("plasator" in d and "vip" not in d for d in deps)
-    elif "cafe" in dep_n:
-        return any("cafe" in d for d in deps)
-    elif "bilete" in dep_n or "casier" in dep_n or "box" in dep_n:
-        return any(k in d for d in deps for k in ["bilete", "casier", "box"])
-    return dep_n in deps
-
-
-# Verifică dacă o tură este de dimineață (începe la sau înainte de 12:00)
-def este_tura_dimineata(ora_start_td):
-    start_h = ora_start_td.total_seconds() / 3600.0
-    return start_h <= 12.0
-
-
-# Verifică dacă o tură este de seară (începe >= 16:00 sau se termină >= 22:00 / după miezul nopții)
-def este_tura_seara(ora_start_td, ora_end_td):
-    start_h = ora_start_td.total_seconds() / 3600.0
-    end_h = ora_end_td.total_seconds() / 3600.0
-    if end_h <= start_h:
-        end_h += 24.0
-    return start_h >= 16.0 or end_h >= 22.0
-
-
-# Verifică dacă o tură din șablon se potrivește cu opțiunea specifică (dimineata / middle / seara)
-def potrivire_tura_specifica(pref_tura, ora_start_td, ora_end_td):
+# Verifică dacă o tură din șablon se potrivește cu opțiunea aleasă de angajat
+def potrivire_tura(pref_tura, ora_start_td, ora_end_td):
     if not pref_tura:
+        return True
+    
+    pref = pref_tura.strip().lower()
+    
+    if pref in ["indisponibil", "liber", "nu pot"]:
         return False
-    pref = normalizeaza_text(pref_tura)
+    if pref in ["oricand", "obligatoriu", "toata ziua", "all"]:
+        return True
 
     start_h = ora_start_td.total_seconds() / 3600.0
     end_h = ora_end_td.total_seconds() / 3600.0
@@ -107,115 +56,27 @@ def potrivire_tura_specifica(pref_tura, ora_start_td, ora_end_td):
         return 12.0 < start_h <= 17.0 and end_h <= 23.5
     elif pref in ["seara", "inchidere", "close"]:
         return start_h >= 16.0 or end_h >= 24.0
-    return False
 
+    return True
 
-# Construiește fișierul Excel identic cu afișajul de pe site
-def genereaza_excel_program(date_zile, zile_pe_rand):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Program Saptamanal"
-
-    fill_titlu_zi = PatternFill(start_color="262730", end_color="262730", fill_type="solid")
-    fill_header = PatternFill(start_color="F4B084", end_color="F4B084", fill_type="solid")
-    fill_verde = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
-    fill_galben = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-    fill_rosu = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-    fill_alb = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-
-    font_titlu_zi = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
-    font_bold_negru = Font(name="Calibri", size=10, bold=True, color="000000")
-    align_center = Alignment(horizontal="center", vertical="center")
-
-    thin_side = Side(border_style="thin", color="000000")
-    med_side = Side(border_style="medium", color="000000")
-    border_celula = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-    border_header = Border(left=thin_side, right=thin_side, top=med_side, bottom=med_side)
-
-    rand_start_grup = 2
-
-    for idx_start in range(0, len(date_zile), zile_pe_rand):
-        grup = date_zile[idx_start: idx_start + zile_pe_rand]
-        max_rand_in_grup = rand_start_grup
-
-        for col_idx, info_zi in enumerate(grup):
-            col_baza = col_idx * 5 + 1
-            rand_curent = rand_start_grup
-
-            ws.column_dimensions[get_column_letter(col_baza)].width = 18
-            ws.column_dimensions[get_column_letter(col_baza + 1)].width = 9
-            ws.column_dimensions[get_column_letter(col_baza + 2)].width = 9
-            ws.column_dimensions[get_column_letter(col_baza + 3)].width = 24
-            ws.column_dimensions[get_column_letter(col_baza + 4)].width = 4
-
-            ws.merge_cells(
-                start_row=rand_curent, start_column=col_baza,
-                end_row=rand_curent, end_column=col_baza + 3
-            )
-            titlu_text = f"{info_zi['zi_ro'].upper()} — {info_zi['data_str']}"
-            for c in range(col_baza, col_baza + 4):
-                cel = ws.cell(row=rand_curent, column=c)
-                if c == col_baza:
-                    cel.value = titlu_text
-                cel.fill = fill_titlu_zi
-                cel.font = font_titlu_zi
-                cel.alignment = align_center
-                cel.border = border_header
-            ws.row_dimensions[rand_curent].height = 24
-            rand_curent += 1
-
-            headers = ["Departament", "Start", "End", "Angajat"]
-            for offset, h_text in enumerate(headers):
-                cel = ws.cell(row=rand_curent, column=col_baza + offset, value=h_text)
-                cel.fill = fill_header
-                cel.font = font_bold_negru
-                cel.alignment = align_center
-                cel.border = border_header
-            ws.row_dimensions[rand_curent].height = 20
-            rand_curent += 1
-
-            for rand_tura in info_zi["randuri"]:
-                dep, start_str, end_str, nume_ang, mod = rand_tura
-
-                if mod == "Verde":
-                    fill_tura = fill_verde
-                elif mod == "Galben":
-                    fill_tura = fill_galben
-                else:
-                    fill_tura = fill_rosu
-
-                valori = [dep, start_str, end_str, nume_ang]
-                for offset, val in enumerate(valori):
-                    cel = ws.cell(row=rand_curent, column=col_baza + offset, value=val)
-                    cel.font = font_bold_negru
-                    cel.alignment = align_center
-                    cel.border = border_celula
-                    cel.fill = fill_alb if offset == 3 else fill_tura
-
-                ws.row_dimensions[rand_curent].height = 18
-                rand_curent += 1
-
-            if rand_curent > max_rand_in_grup:
-                max_rand_in_grup = rand_curent
-
-        rand_start_grup = max_rand_in_grup + 2
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
-
+# Parola poate fi setată în Secrets sau rămâne implicit cinema2026
+parola_corecta = "cinema2026"
+try:
+    if "PAROLA_MANAGER" in st.secrets:
+        parola_corecta = st.secrets["PAROLA_MANAGER"]
+except Exception:
+    pass
 
 if not st.session_state.manager_logat:
     st.title("👔 Acces Manager")
     parola_introdusa = st.text_input("Parolă:", type="password")
     if st.button("Intră în cont"):
-        if parola_introdusa == "cinema2026":
+        if parola_introdusa == parola_corecta: 
             st.session_state.manager_logat = True
             st.rerun()
         else:
             st.error("❌ Parolă incorectă!")
-
+            
 else:
     with st.sidebar:
         st.write("👔 **Mod Manager Activ**")
@@ -228,119 +89,91 @@ else:
         con = get_conexiune()
         cursor = con.cursor()
 
+        # Ne asigurăm că tabelul program_final are coloana mod_trafic
+        try:
+            cursor.execute("ALTER TABLE program_final ADD COLUMN mod_trafic VARCHAR(20) DEFAULT 'Verde'")
+            con.commit()
+        except Exception:
+            pass
+
         tab1, tab2, tab3, tab4 = st.tabs(["📅 Programul Final", "🤖 Generare Automată", "👥 Echipa", "➕ Adaugă Angajat"])
 
         # ==========================================
-        # TAB 1: VIZUALIZARE PROGRAM GRUPAT (GRID) + EXCEL
+        # TAB 1: VIZUALIZARE PROGRAM GRUPAT (GRID)
         # ==========================================
         with tab1:
             st.title("📅 Programul Întregii Săptămâni")
-
+            
             cursor.execute("SELECT DISTINCT data_zi FROM program_final ORDER BY data_zi ASC")
             zile_generate = cursor.fetchall()
-
+            
             if zile_generate:
-                date_zile_procesate = []
-                for zi_tuple in zile_generate:
-                    zi_selectata = zi_tuple[0]
-                    nume_zi_sapt = zi_selectata.strftime('%A')
-                    zi_ro = TRADUCERE_ZILE.get(nume_zi_sapt, 'Luni')
-
-                    cursor.execute("""
-                        SELECT zona, departament, ora_start, ora_end, mod_trafic, necesar_oameni
-                        FROM sabloane_necesar
-                        WHERE zi_saptamana = %s
-                        ORDER BY FIELD(departament, 'VIP Host', 'VIP Plasator', 'Cafe', 'Bilete', 'Bar Mare',
-                                       'Bar IMAX', 'Plasator 1-9', 'Plasator 10-15', 'Plasator 16-20',
-                                       'Plasator IMAX'),
-                                 FIELD(mod_trafic, 'Verde', 'Galben', 'Rosu'),
-                                 ora_start ASC
-                    """, (zi_ro,))
-                    sabloane_zi = cursor.fetchall()
-
-                    cursor.execute("""
-                        SELECT pf.departament, pf.ora_start, pf.ora_end, pf.mod_trafic, a.nume_angajat
-                        FROM program_final pf
-                        LEFT JOIN angajati a ON pf.id_angajat = a.id_angajat
-                        WHERE pf.data_zi = %s
-                    """, (zi_selectata,))
-                    alocati_zi = cursor.fetchall()
-
-                    alocati_map = {}
-                    for al in alocati_zi:
-                        cheie_al = (al[0], al[1], al[2], al[3])
-                        if cheie_al not in alocati_map:
-                            alocati_map[cheie_al] = []
-                        alocati_map[cheie_al].append(al[4] if al[4] else "-")
-
-                    randuri_zi = []
-                    for sablon in sabloane_zi:
-                        zona, dep, o_start, o_end, mod, necesar = (
-                            sablon[0], sablon[1], sablon[2], sablon[3], sablon[4], sablon[5]
-                        )
-                        cheie_s = (dep, o_start, o_end, mod)
-                        start_str = (datetime.min + o_start).time().strftime('%H:%M')
-                        end_str = (datetime.min + o_end).time().strftime('%H:%M')
-
-                        if cheie_s in alocati_map:
-                            lista_nume = alocati_map[cheie_s]
-                            for _ in range(necesar):
-                                nume_angajat = lista_nume.pop(0) if lista_nume else "-"
-                                randuri_zi.append((dep, start_str, end_str, nume_angajat, mod))
-                        else:
-                            for _ in range(necesar):
-                                randuri_zi.append((dep, start_str, end_str, "", mod))
-
-                    date_zile_procesate.append({
-                        "zi_selectata": zi_selectata,
-                        "zi_ro": zi_ro,
-                        "data_str": zi_selectata.strftime('%d.%m.%Y'),
-                        "randuri": randuri_zi
-                    })
-
-                col_act1, col_act2, col_act3 = st.columns([1.1, 1.1, 1.8])
-
-                with col_act3:
+                col_act1, col_act2 = st.columns([1, 2])
+                with col_act1:
+                    if st.button("🗑️ Resetează / Șterge Programul Generat", type="primary"):
+                        cursor.execute("TRUNCATE TABLE program_final")
+                        con.commit()
+                        st.success("Programul a fost șters!")
+                        time.sleep(1)
+                        st.rerun()
+                with col_act2:
                     zile_pe_rand = st.radio(
                         "📐 Câte zile vrei să vezi grupate pe un rând?",
                         options=[2, 3, 4],
                         index=1,
                         horizontal=True
                     )
-
-                with col_act1:
-                    if st.button("🗑️ Resetează / Șterge Programul", type="primary", use_container_width=True):
-                        cursor.execute("TRUNCATE TABLE program_final")
-                        con.commit()
-                        st.success("Programul a fost șters!")
-                        time.sleep(1)
-                        st.rerun()
-
-                with col_act2:
-                    excel_bytes = genereaza_excel_program(date_zile_procesate, zile_pe_rand)
-                    prima_zi_str = date_zile_procesate[0]["zi_selectata"].strftime('%d_%m_%Y')
-                    st.download_button(
-                        label="📥 Descarcă Excel (.xlsx)",
-                        data=excel_bytes,
-                        file_name=f"Program_Cinema_{prima_zi_str}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-
+                    
                 st.write("---")
 
-                for idx_start in range(0, len(date_zile_procesate), zile_pe_rand):
-                    grup_zile = date_zile_procesate[idx_start: idx_start + zile_pe_rand]
+                traducere_zile = {
+                    'Monday': 'Luni', 'Tuesday': 'Marti', 'Wednesday': 'Miercuri',
+                    'Thursday': 'Joi', 'Friday': 'Vineri', 'Saturday': 'Sambata', 'Sunday': 'Duminica'
+                }
+
+                for idx_start in range(0, len(zile_generate), zile_pe_rand):
+                    grup_zile = zile_generate[idx_start : idx_start + zile_pe_rand]
                     coloane_grid = st.columns(zile_pe_rand, gap="medium")
 
-                    for col_idx, info_zi in enumerate(grup_zile):
+                    for col_idx, zi_tuple in enumerate(grup_zile):
+                        zi_selectata = zi_tuple[0]
+                        nume_zi_sapt = zi_selectata.strftime('%A')
+                        zi_ro = traducere_zile.get(nume_zi_sapt, 'Luni')
+
                         with coloane_grid[col_idx]:
-                            if info_zi["randuri"]:
+                            cursor.execute("""
+                                SELECT zona, departament, ora_start, ora_end, mod_trafic, necesar_oameni 
+                                FROM sabloane_necesar 
+                                WHERE zi_saptamana = %s 
+                                ORDER BY 
+                                    FIELD(departament, 'VIP Host', 'VIP Plasator', 'Cafe', 'Bilete', 'Bar Mare', 'Bar IMAX', 'Plasator 1-9', 'Plasator 10-15', 'Plasator 16-20', 'Plasator IMAX'),
+                                    FIELD(mod_trafic, 'Verde', 'Galben', 'Rosu'),
+                                    ora_start ASC
+                            """, (zi_ro,))
+                            sabloane_zi = cursor.fetchall()
+
+                            # Luăm toate alocările din ziua respectivă și le consumăm pe rând (fără dubluri)
+                            cursor.execute("""
+                                SELECT pf.departament, pf.ora_start, pf.ora_end, pf.mod_trafic, a.nume_angajat 
+                                FROM program_final pf 
+                                LEFT JOIN angajati a ON pf.id_angajat = a.id_angajat 
+                                WHERE pf.data_zi = %s
+                            """, (zi_selectata,))
+                            alocari_zi = cursor.fetchall()
+
+                            pool_alocari = {}
+                            for al in alocari_zi:
+                                cheie_al = (al[0], al[1], al[2], al[3])
+                                if cheie_al not in pool_alocari:
+                                    pool_alocari[cheie_al] = []
+                                pool_alocari[cheie_al].append(al[4])
+                            
+                            if sabloane_zi:
                                 html_table = "<div style='margin-bottom: 25px; box-shadow: 0 2px 6px rgba(0,0,0,0.15);'>"
                                 html_table += "<table style='width:100%; border-collapse: collapse; text-align: center; font-family: sans-serif; font-size: 12.5px; color: black; border: 2px solid black;'>"
                                 html_table += "<thead>"
-                                html_table += "<tr style='background-color: #262730; color: white; font-size: 14px; font-weight: bold; border: 2px solid black;'>"
-                                html_table += f"<th colspan='4' style='padding: 8px; text-transform: uppercase; letter-spacing: 0.5px;'>📅 {info_zi['zi_ro']} — {info_zi['data_str']}</th>"
+                                html_table += f"<tr style='background-color: #262730; color: white; font-size: 14px; font-weight: bold; border: 2px solid black;'>"
+                                html_table += f"<th colspan='4' style='padding: 8px; text-transform: uppercase; letter-spacing: 0.5px;'>📅 {zi_ro} — {zi_selectata.strftime('%d.%m.%Y')}</th>"
                                 html_table += "</tr>"
                                 html_table += "<tr style='background-color: #f4b084; color: black; font-weight: bold; border: 2px solid black;'>"
                                 html_table += "<th style='border: 1px solid black; padding: 5px;'>Departament</th>"
@@ -351,8 +184,9 @@ else:
                                 html_table += "</thead>"
                                 html_table += "<tbody>"
 
-                                for rand_tura in info_zi["randuri"]:
-                                    dep, start_str, end_str, nume_angajat, mod = rand_tura
+                                for sablon in sabloane_zi:
+                                    zona, dep, o_start, o_end, mod, necesar = sablon[0], sablon[1], sablon[2], sablon[3], sablon[4], sablon[5]
+                                    cheie_sablon = (dep, o_start, o_end, mod)
 
                                     if mod == 'Verde':
                                         bg_color = "#00b050"
@@ -361,160 +195,139 @@ else:
                                     else:
                                         bg_color = "#ff0000"
 
-                                    html_table += f"<tr style='background-color: {bg_color}; color: black; font-weight: bold; border: 1px solid black;'>"
-                                    html_table += f"<td style='border: 1px solid black; padding: 4px; white-space: nowrap;'>{dep}</td>"
-                                    html_table += f"<td style='border: 1px solid black; padding: 4px;'>{start_str}</td>"
-                                    html_table += f"<td style='border: 1px solid black; padding: 4px;'>{end_str}</td>"
-                                    html_table += f"<td style='border: 1px solid black; padding: 4px; background-color: white; color: black;'>{nume_angajat}</td>"
-                                    html_table += "</tr>"
+                                    start_str = (datetime.min + o_start).time().strftime('%H:%M')
+                                    end_str = (datetime.min + o_end).time().strftime('%H:%M')
 
+                                    for _ in range(necesar):
+                                        nume_afisat = ""
+                                        if cheie_sablon in pool_alocari and len(pool_alocari[cheie_sablon]) > 0:
+                                            nume_extras = pool_alocari[cheie_sablon].pop(0)
+                                            nume_afisat = nume_extras if nume_extras else "-"
+
+                                        html_table += f"<tr style='background-color: {bg_color}; color: black; font-weight: bold; border: 1px solid black;'>"
+                                        html_table += f"<td style='border: 1px solid black; padding: 4px; white-space: nowrap;'>{dep}</td>"
+                                        html_table += f"<td style='border: 1px solid black; padding: 4px;'>{start_str}</td>"
+                                        html_table += f"<td style='border: 1px solid black; padding: 4px;'>{end_str}</td>"
+                                        html_table += f"<td style='border: 1px solid black; padding: 4px; background-color: white; color: black;'>{nume_afisat}</td>"
+                                        html_table += "</tr>"
+                                    
                                 html_table += "</tbody></table></div>"
                                 st.markdown(html_table, unsafe_allow_html=True)
                             else:
-                                st.warning(f"Nu există șabloane pentru {info_zi['zi_ro']}.")
+                                st.warning(f"Nu există șabloane pentru {zi_ro}.")
             else:
                 st.info("Niciun program generat încă. Mergi la tab-ul 'Generare Automată' pentru a crea programul săptămânii.")
 
         # ==========================================
-        # TAB 2: GENERARE AUTOMATĂ & GESTIONARE PREFERINȚE
+        # TAB 2: GENERARE AUTOMATĂ (2 - 5 TURE STRICT)
         # ==========================================
         with tab2:
             st.title("🤖 Generare Program Inteligent")
+            st.info("⚖️ **Reguli active:** Fiecare angajat primește **minim 2 ture** și **maxim 5 ture** pe săptămână (maxim o tură pe zi).")
+            
             col1, col2, col3 = st.columns(3)
             moduri = ["Verde (Bază)", "Galben (Mediu)", "Roșu (Aglomerat)"]
-
+            
             mod_vip = col1.selectbox("Mod VIP:", moduri)
             mod_imax = col2.selectbox("Mod IMAX:", moduri)
             mod_cinema = col3.selectbox("Mod Cinema:", moduri)
-
-            # SINCRONIZAT CU APLICAȚIA ANGAJAȚILOR: Următoarea zi de Joi
-            azi = date.today()
-            zile_pana_la_joi = (3 - azi.weekday()) % 7
-            if zile_pana_la_joi == 0:
-                zile_pana_la_joi = 7
-            joi_implicit = azi + timedelta(days=zile_pana_la_joi)
-
-            data_start = st.date_input("Data de început a săptămânii (Joi):", value=joi_implicit)
-            sfarsit_sapt = data_start + timedelta(days=6)
-
-            if data_start.weekday() != 3:
-                st.warning(
-                    f"⚠️ Atenție: Data selectată ({data_start.strftime('%d.%m.%Y')}) este "
-                    f"**{TRADUCERE_ZILE[data_start.strftime('%A')]}**, nu Joi!"
-                )
-
-            st.write("---")
-            st.subheader("🗂️ Gestionare Preferințe Angajați")
-
-            cursor.execute("SELECT MIN(data_zi), MAX(data_zi), COUNT(*) FROM cand_pot_lucra")
-            interval_pref = cursor.fetchone()
-            if interval_pref and interval_pref[0]:
-                st.info(
-                    f"📌 Preferințe totale în baza de date: **{interval_pref[2]} opțiuni** "
-                    f"(perioada **{interval_pref[0].strftime('%d.%m.%Y')} — {interval_pref[1].strftime('%d.%m.%Y')}**)"
-                )
-            else:
-                st.warning("📭 Momentan nu există nicio preferință salvată în baza de date.")
-
-            col_pref1, col_pref2 = st.columns(2)
-            with col_pref1:
-                if st.button(
-                    f"🧹 Șterge preferințele vechi (înainte de {data_start.strftime('%d.%m.%Y')})",
-                    use_container_width=True
-                ):
-                    cursor.execute("DELETE FROM cand_pot_lucra WHERE data_zi < %s", (data_start,))
-                    sters = cursor.rowcount
-                    con.commit()
-                    st.success(f"✅ Au fost șterse {sters} preferințe din săptămânile trecute!")
-                    time.sleep(1.2)
-                    st.rerun()
-
-            with col_pref2:
-                if st.button("🗑️ Șterge TOATE preferințele (Resetare completă)", use_container_width=True):
-                    cursor.execute("TRUNCATE TABLE cand_pot_lucra")
-                    con.commit()
-                    st.success("✅ Toate preferințele au fost șterse! Angajații pot introduce acum opțiunile actualizate.")
-                    time.sleep(1.2)
-                    st.rerun()
-
-            with st.expander(
-                f"👀 Vezi preferințele actualizate pentru săptămâna selectată "
-                f"({data_start.strftime('%d.%m.%Y')} — {sfarsit_sapt.strftime('%d.%m.%Y')})"
-            ):
-                cursor.execute("""
-                    SELECT a.nume_angajat, c.data_zi, c.tura
-                    FROM cand_pot_lucra c
-                    JOIN angajati a ON c.id_angajat = a.id_angajat
-                    WHERE c.data_zi BETWEEN %s AND %s
-                    ORDER BY c.data_zi ASC, a.nume_angajat ASC
-                """, (data_start, sfarsit_sapt))
-                pref_sapt = cursor.fetchall()
-
-                if pref_sapt:
-                    tabel_pref = [
-                        {
-                            "Angajat": r[0],
-                            "Ziua": f"{TRADUCERE_ZILE.get(r[1].strftime('%A'), '')} ({r[1].strftime('%d.%m.%Y')})",
-                            "Preferință Tură": r[2]
-                        }
-                        for r in pref_sapt
-                    ]
-                    st.dataframe(tabel_pref, use_container_width=True)
-                else:
-                    st.info("Nicio preferință introdusă încă pentru această săptămână.")
-
-            st.write("---")
-
+            
+            data_start = st.date_input("Data de început a săptămânii (Joi):")
+            
             if st.button("🚀 Generează Programul", use_container_width=True, type="primary"):
+                MIN_TURE = 2
+                MAX_TURE = 5
+
                 mapare_mod = {
                     "Verde (Bază)": ["Verde"],
                     "Galben (Mediu)": ["Verde", "Galben"],
                     "Roșu (Aglomerat)": ["Verde", "Galben", "Rosu"]
                 }
+                
+                mapare_abilitati = {
+                    "Bar Mare": "Bar",
+                    "Bar IMAX": "Bar",
+                    "Plasator 1-9": "Plasator",
+                    "Plasator 10-15": "Plasator",
+                    "Plasator 16-20": "Plasator",
+                    "Plasator IMAX": "Plasator",
+                    "VIP Host": "VIP",
+                    "VIP Plasator": "VIP",
+                    "Cafe": "Cafe",
+                    "Bilete": "Casier" 
+                }
+
+                zile_saptamana = ['Joi', 'Vineri', 'Sambata', 'Duminica', 'Luni', 'Marti', 'Miercuri']
+                zile_obligatorii = {'Sambata', 'Duminica', 'Marti'}
+                data_end = data_start + timedelta(days=6)
 
                 cursor.execute("TRUNCATE TABLE program_final")
-
+                
                 cursor.execute("""
-                    SELECT a.id_angajat, a.nume_angajat, a.gen, a.rating, GROUP_CONCAT(DISTINCT ad.departament)
-                    FROM angajati a
-                    JOIN angajat_departament ad ON a.id_angajat = ad.id_angajat
+                    SELECT a.id_angajat, a.nume_angajat, a.gen, a.rating, GROUP_CONCAT(ad.departament) 
+                    FROM angajati a JOIN angajat_departament ad ON a.id_angajat = ad.id_angajat 
                     GROUP BY a.id_angajat
                 """)
                 toti_angajatii = cursor.fetchall()
-                angajati_dict = {ang[0]: ang for ang in toti_angajatii}
-                # Calculăm câte departamente știe fiecare angajat (cei cu 1 singur departament sunt folosiți primii acolo,
-                # păstrându-i pe cei polivalenți disponibili pentru departamentele rare)
-                nr_abilitati = {
-                    ang[0]: len([d for d in (ang[4] or "").split(",") if d.strip()])
+                ang_dict = {
+                    ang[0]: {
+                        "id": ang[0],
+                        "nume": ang[1],
+                        "gen": ang[2],
+                        "rating": float(ang[3]) if ang[3] else 5.0,
+                        "deps": [d.strip() for d in ang[4].split(",")] if ang[4] else []
+                    }
                     for ang in toti_angajatii
                 }
-
-                cursor.execute("SELECT id_angajat, data_zi, tura FROM cand_pot_lucra")
+                
+                # Citim preferințele săptămânii curente din cand_pot_lucra
+                cursor.execute("""
+                    SELECT id_angajat, data_zi, tura 
+                    FROM cand_pot_lucra 
+                    WHERE data_zi BETWEEN %s AND %s
+                """, (data_start, data_end))
                 toate_preferintele = cursor.fetchall()
+                
                 pref_dict = {}
+                angajati_cu_formular = set()
                 for p in toate_preferintele:
-                    cheie = (p[0], p[1])
+                    id_a, d_zi, tura_pref = p[0], p[1], p[2]
+                    angajati_cu_formular.add(id_a)
+                    cheie = (id_a, d_zi)
                     if cheie not in pref_dict:
                         pref_dict[cheie] = []
-                    if p[2]:
-                        pref_dict[cheie].append(normalizeaza_text(p[2]))
+                    pref_dict[cheie].append(tura_pref)
 
-                istoric_saptamanal = {ang[0]: 0 for ang in toti_angajatii}
-                lucrat_seara_zi = {}
+                # Verificăm în ce zile și pe ce ture poate lucra un angajat
+                def poate_lucra(id_ang, data_zi, nume_zi, ora_s, ora_e, fortat_minim=False):
+                    # Zilele de Sâmbătă, Duminică și Marți sunt mereu disponibile (obligatorii)
+                    if nume_zi in zile_obligatorii:
+                        return True, True
+                    
+                    # Dacă angajatul a completat formularul pe săptămâna aceasta:
+                    if id_ang in angajati_cu_formular:
+                         optiuni = pref_dict.get((id_ang, data_zi))
+                        if not optiuni:
+                            # Nu are înregistrare în acea zi flexibilă => a bifat "Liber"
+                            return False, False
+                        if any(potrivire_tura(opt, ora_s, ora_e) for opt in optiuni):
+                            return True, True
+                        # Dacă forțăm atingerea minimului de 2 ture și omul a zis că poate veni în acea zi
+                        if fortat_minim:
+                            return True, False
+                        return False, False
+                    else:
+                        # Dacă nu a completat formularul, îl considerăm disponibil
+                        return True, False
 
-                for i in range(7):
+                # Colectăm toate locurile (sloturile) de muncă din întreaga săptămână
+                filtre_vip = "','".join(mapare_mod[mod_vip])
+                filtre_imax = "','".join(mapare_mod[mod_imax])
+                filtre_cinema = "','".join(mapare_mod[mod_cinema])
+
+                sloturi_saptamana = []
+                for i, nume_zi in enumerate(zile_saptamana):
                     data_curenta = data_start + timedelta(days=i)
-                    data_ieri = data_curenta - timedelta(days=1)
-                    nume_zi = TRADUCERE_ZILE.get(data_curenta.strftime('%A'), 'Luni')
-
-                    lucrat_seara_zi[data_curenta] = set()
-                    angajati_seara_ieri = lucrat_seara_zi.get(data_ieri, set())
-
-                    filtre_vip = "','".join(mapare_mod[mod_vip])
-                    filtre_imax = "','".join(mapare_mod[mod_imax])
-                    filtre_cinema = "','".join(mapare_mod[mod_cinema])
-
-                    # Alocăm mai întâi departamentele mai specializate (VIP, Cafe, Bilete) și apoi Bar / Plasatori
                     cursor.execute(f"""
                         SELECT id_necesar, departament, ora_start, ora_end, necesar_oameni, zona, mod_trafic 
                         FROM sabloane_necesar 
@@ -522,295 +335,208 @@ else:
                             (zona = 'VIP' AND mod_trafic IN ('{filtre_vip}')) OR
                             (zona = 'IMAX' AND mod_trafic IN ('{filtre_imax}')) OR
                             (zona = 'Cinema' AND mod_trafic IN ('{filtre_cinema}'))
-                        )
-                        ORDER BY FIELD(departament, 'VIP Host', 'VIP Plasator', 'Cafe', 'Bilete',
-                                       'Bar IMAX', 'Bar Mare', 'Plasator IMAX', 'Plasator 1-9',
-                                       'Plasator 10-15', 'Plasator 16-20'),
-                                 ora_start ASC
+                        ) ORDER BY ora_start ASC
                     """)
-                    ture_necesare = cursor.fetchall()
-
-                    sloturi_zi = []
-                    for tura in ture_necesare:
+                    ture_zi = cursor.fetchall()
+                    for tura in ture_zi:
                         dep_necesar = tura[1]
                         ora_s, ora_e = tura[2], tura[3]
                         oameni_necesari = tura[4]
                         mod_tura = tura[6]
+                        abilitate = mapare_abilitati.get(dep_necesar, dep_necesar)
                         for _ in range(oameni_necesari):
-                            sloturi_zi.append({
-                                "dep": dep_necesar,
-                                "ora_s": ora_s,
-                                "ora_e": ora_e,
-                                "mod": mod_tura,
-                                "id_alocat": None
+                            sloturi_saptamana.append({
+                                "data_zi": data_curenta,
+                                "nume_zi": nume_zi,
+                                "departament": dep_necesar,
+                                "abilitate": abilitate,
+                                "ora_start": ora_s,
+                                "ora_end": ora_e,
+                                "mod_trafic": mod_tura,
+                                "id_angajat": None
                             })
 
-                    # Mulțimea angajaților care au primit deja o tură AZI (MAXIM 1 TURĂ PE ZI!)
-                    angajati_folositi_azi = set()
+                istoric_saptamanal = {id_a: 0 for id_a in ang_dict}
+                zile_lucrate_angajat = {id_a: set() for id_a in ang_dict}
 
-                    def aloca_angajat(slot, id_ales):
-                        slot["id_alocat"] = id_ales
-                        angajati_folositi_azi.add(id_ales)
-                        istoric_saptamanal[id_ales] += 1
-                        if este_tura_seara(slot["ora_s"], slot["ora_e"]):
-                            lucrat_seara_zi[data_curenta].add(id_ales)
+                # Calculăm câte zile disponibile are fiecare angajat în total (pentru a-i prioritiza pe cei cu opțiuni puține)
+                zile_disp_count = {}
+                for id_a in ang_dict:
+                    cnt = 0
+                    for i, n_zi in enumerate(zile_saptamana):
+                        d_zi = data_start + timedelta(days=i)
+                        if n_zi in zile_obligatorii or (id_a in angajati_cu_formular and (id_a, d_zi) in pref_dict) or (id_a not in angajati_cu_formular):
+                            cnt += 1
+                    zile_disp_count[id_a] = cnt
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 1: Preferință EXACTĂ (dimineata / middle / seara)
-                    # Regulă: MAX 1 tură/zi + DOAR departamentul cunoscut + < 5 ture
-                    # ---------------------------------------------------------
-                    for slot in sloturi_zi:
-                        if slot["id_alocat"] is not None:
+                # =========================================================
+                # FAZA 1 & 2: ALOCAREA INIȚIALĂ (CU PLAFON MAXIM 5 TURE)
+                # =========================================================
+                for slot in sloturi_saptamana:
+                    d_zi = slot["data_zi"]
+                    n_zi = slot["nume_zi"]
+                    abil = slot["abilitate"]
+                    ora_s = slot["ora_start"]
+                    ora_e = slot["ora_end"]
+
+                    candidati = []
+                    for id_a, info in ang_dict.items():
+                        # REGULĂ STRICTĂ: Maxim 5 ture pe săptămână și maxim 1 tură pe zi
+                        if istoric_saptamanal[id_a] >= MAX_TURE:
                             continue
-                        este_dim = este_tura_dimineata(slot["ora_s"])
-                        candidati = []
-                        for ang in toti_angajatii:
-                            id_ang, deps = ang[0], ang[4]
-                            if id_ang in angajati_folositi_azi or istoric_saptamanal[id_ang] >= 5:
-                                continue
-                            if este_dim and id_ang in angajati_seara_ieri:
-                                continue
-                            if not are_abilitate(slot["dep"], deps):
-                                continue
-                            prefs = pref_dict.get((id_ang, data_curenta), [])
-                            if any(potrivire_tura_specifica(p, slot["ora_s"], slot["ora_e"]) for p in prefs):
-                                candidati.append(ang)
-
-                        if candidati:
-                            candidati.sort(key=lambda a: (
-                                istoric_saptamanal[a[0]] >= 2,
-                                istoric_saptamanal[a[0]],
-                                -float(a[3] or 0),
-                                nr_abilitati[a[0]]
-                            ))
-                            aloca_angajat(slot, candidati[0][0])
-
-                    # ---------------------------------------------------------
-                    # TREAPTA 2: Angajați care au ales "oricand" în această zi
-                    # Regulă: MAX 1 tură/zi + DOAR departamentul cunoscut + < 5 ture
-                    # ---------------------------------------------------------
-                    for slot in sloturi_zi:
-                        if slot["id_alocat"] is not None:
+                        if d_zi in zile_lucrate_angajat[id_a]:
                             continue
-                        este_dim = este_tura_dimineata(slot["ora_s"])
-                        candidati = []
-                        for ang in toti_angajatii:
-                            id_ang, deps = ang[0], ang[4]
-                            if id_ang in angajati_folositi_azi or istoric_saptamanal[id_ang] >= 5:
-                                continue
-                            if este_dim and id_ang in angajati_seara_ieri:
-                                continue
-                            if not are_abilitate(slot["dep"], deps):
-                                continue
-                            prefs = pref_dict.get((id_ang, data_curenta), [])
-                            if any(p in ["oricand", "toata ziua", "all"] for p in prefs):
-                                candidati.append(ang)
-
-                        if candidati:
-                            candidati.sort(key=lambda a: (
-                                istoric_saptamanal[a[0]] >= 2,
-                                istoric_saptamanal[a[0]],
-                                -float(a[3] or 0),
-                                nr_abilitati[a[0]]
-                            ))
-                            aloca_angajat(slot, candidati[0][0])
-
-                    # ---------------------------------------------------------
-                    # TREAPTA 3: Completare când nu sunt oameni pe tura exactă
-                    # Regulă: MAX 1 tură/zi + DOAR departamentul cunoscut + < 5 ture
-                    # Departajare: cei cu RATINGUL CEL MAI MIC primii
-                    # ---------------------------------------------------------
-                    for slot in sloturi_zi:
-                        if slot["id_alocat"] is not None:
+                        if abil not in info["deps"]:
                             continue
-                        este_dim = este_tura_dimineata(slot["ora_s"])
-                        candidati = []
-                        for ang in toti_angajatii:
-                            id_ang, deps = ang[0], ang[4]
-                            if id_ang in angajati_folositi_azi or istoric_saptamanal[id_ang] >= 5:
-                                continue
-                            if este_dim and id_ang in angajati_seara_ieri:
-                                continue
-                            if not are_abilitate(slot["dep"], deps):
-                                continue
-                            prefs = pref_dict.get((id_ang, data_curenta), [])
-                            if not prefs:
-                                status_disp = 1
-                            elif all(p in ["liber", "indisponibil", "nu pot"] for p in prefs):
-                                status_disp = 2
-                            else:
-                                status_disp = 0
-                            candidati.append((ang, status_disp))
 
-                        if candidati:
-                            candidati.sort(key=lambda x: (
-                                x[1],
-                                istoric_saptamanal[x[0][0]] >= 2,
-                                float(x[0][3] or 0),
-                                istoric_saptamanal[x[0][0]],
-                                nr_abilitati[x[0][0]]
-                            ))
-                            aloca_angajat(slot, candidati[0][0][0])
-
-                    # ---------------------------------------------------------
-                    # TREAPTA 4: Dacă toți din departament au >= 5 ture în săptămână,
-                    # permitem depășirea limitei săptămânale, DAR TOT MAXIM 1 TURĂ PE ZI!
-                    # ---------------------------------------------------------
-                    for slot in sloturi_zi:
-                        if slot["id_alocat"] is not None:
+                        disp, pref_exact = poate_lucra(id_a, d_zi, n_zi, ora_s, ora_e, fortat_minim=False)
+                        if not disp:
                             continue
-                        este_dim = este_tura_dimineata(slot["ora_s"])
-                        candidati = []
-                        for ang in toti_angajatii:
-                            id_ang, deps = ang[0], ang[4]
-                            if id_ang in angajati_folositi_azi:
-                                continue  # STRICT: Nu poate avea 2 ture în aceeași zi!
-                            if este_dim and id_ang in angajati_seara_ieri:
-                                continue
-                            if not are_abilitate(slot["dep"], deps):
-                                continue
-                            candidati.append(ang)
 
-                        if candidati:
-                            candidati.sort(key=lambda a: (
-                                float(a[3] or 0),
-                                istoric_saptamanal[a[0]],
-                                nr_abilitati[a[0]]
-                            ))
-                            aloca_angajat(slot, candidati[0][0])
+                        candidati.append((id_a, pref_exact, info["rating"]))
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 5: ROCADĂ INTELIGENTĂ (FĂRĂ 2 TURE ÎN ACEEAȘI ZI!)
-                    # Dacă un slot a rămas gol pentru că angajatul calificat e pus pe alt
-                    # departament azi, căutăm un angajat LIBER AZI care îi poate lua locul
-                    # ---------------------------------------------------------
-                    for slot_gol in sloturi_zi:
-                        if slot_gol["id_alocat"] is not None:
+                    if candidati:
+                        # ORDINEA DE PRIORITATE:
+                        # 1. Angajații care au SUB 2 TURE au prioritate absolută (0 ture înaintea celor cu 1 tură)
+                        # 2. Cei cu mai puține zile disponibile în săptămână (ca să nu își piardă șansa la minim 2 ture)
+                        # 3. Potrivirea exactă pe preferință
+                        # 4. Echilibrarea turelor (cine are 2 ture primește înaintea celui cu 3 sau 4 ture)
+                        # 5. Rating-ul (descrescător)
+                        candidati.sort(key=lambda x: (
+                            0 if istoric_saptamanal[x[0]] < MIN_TURE else 1,
+                            istoric_saptamanal[x[0]],
+                            zile_disp_count[x[0]],
+                            not x[1],
+                            -x[2]
+                        ))
+
+                        ales_id = candidati[0][0]
+                        slot["id_angajat"] = ales_id
+                        istoric_saptamanal[ales_id] += 1
+                        zile_lucrate_angajat[ales_id].add(d_zi)
+
+                # =========================================================
+                # FAZA 3: CORECȚIE AUTOMATĂ (SWAP) PENTRU MINIM 2 TURE
+                # =========================================================
+                # Dacă cineva a rămas cu 0 sau 1 tură, îi căutăm loc liber sau preluăm o tură de la un coleg cu 3, 4 sau 5 ture
+                for id_sub, info_sub in ang_dict.items():
+                    incercari = 0
+                    while istoric_saptamanal[id_sub] < MIN_TURE and incercari < 10:
+                        incercari += 1
+                        gasit_loc = False
+
+                        # Pas 3A: Căutăm mai întâi un slot rămas neocupat compatibil
+                        for slot in sloturi_saptamana:
+                            if slot["id_angajat"] is None and slot["data_zi"] not in zile_lucrate_angajat[id_sub]:
+                                if slot["abilitate"] in info_sub["deps"]:
+                                    disp, _ = poate_lucra(id_sub, slot["data_zi"], slot["nume_zi"], slot["ora_start"], slot["ora_end"], fortat_minim=True)
+                                    if disp:
+                                        slot["id_angajat"] = id_sub
+                                        istoric_saptamanal[id_sub] += 1
+                                        zile_lucrate_angajat[id_sub].add(slot["data_zi"])
+                                        gasit_loc = True
+                                        break
+
+                        if gasit_loc:
                             continue
-                        este_dim_gol = este_tura_dimineata(slot_gol["ora_s"])
 
-                        for slot_ocupat in sloturi_zi:
-                            id_ocupat = slot_ocupat["id_alocat"]
-                            if id_ocupat is None:
-                                continue
-                            ang_ocupat = angajati_dict[id_ocupat]
+                        # Pas 3B: Facem rocadă (Swap) cu un coleg care are deja > 2 ture (ex: 5, 4 sau 3 ture)
+                        sloturi_eligibile_swap = []
+                        for slot in sloturi_saptamana:
+                            id_actual = slot["id_angajat"]
+                            if id_actual is not None and id_actual != id_sub:
+                                # Luăm doar de la colegii care au cel puțin 3 ture (ca să rămână și ei cu minim 2!)
+                                if istoric_saptamanal[id_actual] > MIN_TURE and slot["data_zi"] not in zile_lucrate_angajat[id_sub]:
+                                    if slot["abilitate"] in info_sub["deps"]:
+                                        disp, pref_ex = poate_lucra(id_sub, slot["data_zi"], slot["nume_zi"], slot["ora_start"], slot["ora_end"], fortat_minim=True)
+                                        if disp:
+                                            sloturi_eligibile_swap.append((slot, istoric_saptamanal[id_actual], pref_ex))
 
-                            # Verificăm dacă angajatul deja alocat azi știe departamentul slotului gol
-                            if not are_abilitate(slot_gol["dep"], ang_ocupat[4]):
-                                continue
-                            if este_dim_gol and id_ocupat in angajati_seara_ieri:
-                                continue
+                        if sloturi_eligibile_swap:
+                            # Luăm tura de la colegul cu cele mai multe ture (ex: 5 ture -> scade la 4 ture)
+                            sloturi_eligibile_swap.sort(key=lambda x: (-x[1], not x[2]))
+                            slot_ales = sloturi_eligibile_swap[0][0]
+                            id_vechi = slot_ales["id_angajat"]
 
-                            # Căutăm un înlocuitor care NU lucrează deloc azi și știe departamentul lui slot_ocupat
-                            este_dim_ocupat = este_tura_dimineata(slot_ocupat["ora_s"])
-                            inlocuitori = []
-                            for ang_liber in toti_angajatii:
-                                id_liber, deps_liber = ang_liber[0], ang_liber[4]
-                                if id_liber in angajati_folositi_azi:
-                                    continue  # STRICT: Doar oameni care NU au tură azi
-                                if este_dim_ocupat and id_liber in angajati_seara_ieri:
-                                    continue
-                                if not are_abilitate(slot_ocupat["dep"], deps_liber):
-                                    continue
-                                inlocuitori.append(ang_liber)
+                            # Efectuăm schimbul
+                            istoric_saptamanal[id_vechi] -= 1
+                            zile_lucrate_angajat[id_vechi].remove(slot_ales["data_zi"])
 
-                            if inlocuitori:
-                                inlocuitori.sort(key=lambda a: (
-                                    istoric_saptamanal[a[0]] >= 5,
-                                    istoric_saptamanal[a[0]] >= 2,
-                                    float(a[3] or 0),
-                                    istoric_saptamanal[a[0]]
-                                ))
-                                id_inlocuitor = inlocuitori[0][0]
+                            slot_ales["id_angajat"] = id_sub
+                            istoric_saptamanal[id_sub] += 1
+                            zile_lucrate_angajat[id_sub].add(slot_ales["data_zi"])
+                        else:
+                            break
 
-                                # Facem rocada: ang_ocupat trece pe slot_gol, iar id_inlocuitor preia slot_ocupat
-                                if este_tura_seara(slot_ocupat["ora_s"], slot_ocupat["ora_e"]):
-                                    lucrat_seara_zi[data_curenta].discard(id_ocupat)
-
-                                slot_gol["id_alocat"] = id_ocupat
-                                if este_tura_seara(slot_gol["ora_s"], slot_gol["ora_e"]):
-                                    lucrat_seara_zi[data_curenta].add(id_ocupat)
-
-                                slot_ocupat["id_alocat"] = id_inlocuitor
-                                angajati_folositi_azi.add(id_inlocuitor)
-                                istoric_saptamanal[id_inlocuitor] += 1
-                                if este_tura_seara(slot_ocupat["ora_s"], slot_ocupat["ora_e"]):
-                                    lucrat_seara_zi[data_curenta].add(id_inlocuitor)
-                                break
-
-                    # Salvăm toate sloturile zilei în baza de date
-                    for slot in sloturi_zi:
-                        cursor.execute(
-                            "INSERT INTO program_final (id_angajat, data_zi, departament, ora_start, ora_end, mod_trafic) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (slot["id_alocat"], data_curenta, slot["dep"], slot["ora_s"], slot["ora_e"], slot["mod"])
-                        )
+                # Salvăm toate sloturile în baza de date
+                for slot in sloturi_saptamana:
+                    cursor.execute("""
+                        INSERT INTO program_final (id_angajat, data_zi, departament, ora_start, ora_end, mod_trafic) 
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (slot["id_angajat"], slot["data_zi"], slot["departament"], slot["ora_start"], slot["ora_end"], slot["mod_trafic"]))
 
                 con.commit()
-                st.success("✅ Programul a fost generat! Fiecare angajat are cel mult o tură pe zi și doar pe departamentele cunoscute.")
+                st.success("✅ Programul a fost generat! Toți angajații eligibili au între minim 2 și maxim 5 ture.")
                 time.sleep(1.5)
                 st.rerun()
 
         # ==========================================
         # TAB 3: GESTIONARE ECHIPĂ & STATISTICI
         # ==========================================
-        departamente_existente = ["Bar", "Plasator", "VIP", "Cafe", "Bilete"]
+        departamente_existente = ["Bar", "Plasator", "VIP", "Cafe", "Casier"] 
 
         with tab3:
             st.title("👥 Gestionare Echipa")
-
+            
             cursor.execute("SELECT COUNT(id_angajat) FROM angajati")
             total_angajati = cursor.fetchone()[0]
             st.write(f"Număr total de angajați activi în sistem: **{total_angajati}**")
-
-            with st.expander("📊 Vezi statistici ture angajați (Săptămâna curentă)"):
+            
+            with st.expander("📊 Vezi statistici ture angajați (Săptămâna curentă)", expanded=True):
                 cursor.execute("""
-                    SELECT a.nume_angajat, pf.departament
-                    FROM program_final pf
-                    JOIN angajati a ON pf.id_angajat = a.id_angajat
+                    SELECT a.id_angajat, a.nume_angajat, pf.departament 
+                    FROM angajati a
+                    LEFT JOIN program_final pf ON a.id_angajat = pf.id_angajat
                 """)
-                ture_alocate = cursor.fetchall()
-
-                if ture_alocate:
+                randuri_stat = cursor.fetchall()
+                
+                if randuri_stat:
                     statistici = {}
-                    for nume, dep in ture_alocate:
+                    for id_a, nume, dep in randuri_stat:
                         if nume not in statistici:
                             statistici[nume] = {}
-                        if dep not in statistici[nume]:
-                            statistici[nume][dep] = 0
-                        statistici[nume][dep] += 1
-
+                        if dep:
+                            statistici[nume][dep] = statistici[nume].get(dep, 0) + 1
+                        
                     tabel_statistici = []
                     for nume, deps in statistici.items():
                         total_ture = sum(deps.values())
-                        detalii_ture = ", ".join([f"{d} ({c}x)" for d, c in deps.items()])
-                        tabel_statistici.append({"Angajat": nume, "Total Ture": total_ture, "Repartizare": detalii_ture})
-
+                        detalii_ture = ", ".join([f"{d} ({c}x)" for d, c in deps.items()]) if deps else "Fără ture alocate"
+                        status_regula = "✅ OK (2-5 ture)" if 2 <= total_ture <= 5 else ("⚠️ Sub 2 ture" if total_ture < 2 else "❌ Peste 5 ture")
+                        tabel_statistici.append({
+                            "Angajat": nume,
+                            "Total Ture": total_ture,
+                            "Status": status_regula,
+                            "Repartizare": detalii_ture
+                        })
+                        
                     tabel_statistici = sorted(tabel_statistici, key=lambda x: x["Total Ture"], reverse=True)
                     st.dataframe(tabel_statistici, use_container_width=True)
                 else:
-                    st.info("Nu există ture alocate momentan. Generează programul din tab-ul 'Generare Automată'.")
+                    st.info("Nu există angajați sau ture alocate momentan.")
 
             st.write("---")
-
+            
             col_stanga, col_dreapta = st.columns([1, 1.2], gap="large")
             with col_stanga:
                 dep_ales = st.selectbox("Filtrează după abilitate:", departamente_existente)
-                if dep_ales == "Bilete":
-                    cursor.execute("""
-                        SELECT DISTINCT a.id_angajat, a.nume_angajat, a.adresa_email, a.rating, a.gen
-                        FROM angajati a
-                        JOIN angajat_departament ad ON a.id_angajat = ad.id_angajat
-                        WHERE ad.departament IN ('Bilete', 'Casier', 'Box')
-                    """)
-                else:
-                    cursor.execute("""
-                        SELECT DISTINCT a.id_angajat, a.nume_angajat, a.adresa_email, a.rating, a.gen
-                        FROM angajati a
-                        JOIN angajat_departament ad ON a.id_angajat = ad.id_angajat
-                        WHERE ad.departament LIKE %s
-                    """, (f"%{dep_ales}%",))
+                cursor.execute("""
+                    SELECT a.id_angajat, a.nume_angajat, a.adresa_email, a.rating, a.gen 
+                    FROM angajati a JOIN angajat_departament ad ON a.id_angajat = ad.id_angajat 
+                    WHERE ad.departament = %s
+                """, (dep_ales,))
                 angajati_filtrati = cursor.fetchall()
-
+                
                 if angajati_filtrati:
                     st.write("---")
                     for rand in angajati_filtrati:
@@ -831,15 +557,14 @@ else:
                     date_ang = cursor.fetchone()
                     if date_ang:
                         cursor.execute("SELECT departament FROM angajat_departament WHERE id_angajat = %s", (id_ales,))
-                        deps_cur_raw = [r[0] for r in cursor.fetchall()]
-                        deps_cur = ["Bilete" if d in ["Casier", "Box"] else d for d in deps_cur_raw]
-
+                        deps_cur = [r[0] for r in cursor.fetchall()]
+                        
                         st.subheader(f"Editează: {date_ang[0]}")
                         nou_email = st.text_input("Email:", value=date_ang[1])
                         nou_gen = st.selectbox("Gen:", ["M", "F"], index=0 if date_ang[3] == "M" else 1)
                         nou_rating = st.number_input("Rating (Max 5.0):", min_value=1.0, max_value=5.0, value=float(date_ang[2]), step=0.1)
-                        nou_deps = st.multiselect("Abilități (Departamente):", departamente_existente, default=list(set([d for d in deps_cur if d in departamente_existente])))
-
+                        nou_deps = st.multiselect("Abilități (Departamente):", departamente_existente, default=[d for d in deps_cur if d in departamente_existente])
+                        
                         c1, c2 = st.columns(2)
                         if c1.button("💾 Salvează"):
                             cursor.execute("UPDATE angajati SET adresa_email = %s, rating = %s, gen = %s WHERE id_angajat = %s", (nou_email, nou_rating, nou_gen, id_ales))
@@ -847,7 +572,7 @@ else:
                             for dep in nou_deps:
                                 cursor.execute("INSERT INTO angajat_departament (id_angajat, departament) VALUES (%s, %s)", (id_ales, dep))
                             con.commit()
-                            st.session_state.id_angajat_de_editat = None
+                            st.session_state.id_angajat_de_editat = None 
                             st.rerun()
                         if c2.button("❌ Șterge"):
                             cursor.execute("DELETE FROM cand_pot_lucra WHERE id_angajat = %s", (id_ales,))
@@ -855,7 +580,7 @@ else:
                             cursor.execute("DELETE FROM program_final WHERE id_angajat = %s", (id_ales,))
                             cursor.execute("DELETE FROM angajati WHERE id_angajat = %s", (id_ales,))
                             con.commit()
-                            st.session_state.id_angajat_de_editat = None
+                            st.session_state.id_angajat_de_editat = None 
                             st.rerun()
 
         # ==========================================
@@ -868,7 +593,7 @@ else:
             n_gen = st.selectbox("Gen:", ["M", "F"], key="gen_nou")
             n_rating = st.number_input("Rating inițial (1 la 5):", min_value=1.0, max_value=5.0, value=5.0, step=0.1)
             deps_alese = st.multiselect("Abilități (Departamente):", departamente_existente, key="deps_nou")
-
+            
             if st.button("💾 Înregistrează Angajatul"):
                 if n_nume and n_email and deps_alese:
                     nou_id = random.randint(1000, 99999)
