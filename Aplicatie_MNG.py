@@ -73,15 +73,9 @@ def are_abilitate(dep_necesar, deps_angajat_str):
     elif "bilete" in dep_n or "casier" in dep_n or "box" in dep_n:
         return any(k in d for d in deps for k in ["bilete", "casier", "box"])
     return dep_n in deps
-
-
-# Verifică dacă o tură este de dimineață (începe la sau înainte de 12:00)
 def este_tura_dimineata(ora_start_td):
     start_h = ora_start_td.total_seconds() / 3600.0
     return start_h <= 12.0
-
-
-# Verifică dacă o tură este de seară (începe >= 16:00 sau se termină >= 22:00 / după miezul nopții)
 def este_tura_seara(ora_start_td, ora_end_td):
     start_h = ora_start_td.total_seconds() / 3600.0
     end_h = ora_end_td.total_seconds() / 3600.0
@@ -89,8 +83,6 @@ def este_tura_seara(ora_start_td, ora_end_td):
         end_h += 24.0
     return start_h >= 16.0 or end_h >= 22.0
 
-
-# Verifică dacă o tură din șablon se potrivește cu opțiunea specifică (dimineata / middle / seara)
 def potrivire_tura_specifica(pref_tura, ora_start_td, ora_end_td):
     if not pref_tura:
         return False
@@ -109,8 +101,6 @@ def potrivire_tura_specifica(pref_tura, ora_start_td, ora_end_td):
         return start_h >= 16.0 or end_h >= 24.0
     return False
 
-
-# Construiește fișierul Excel identic cu afișajul de pe site
 def genereaza_excel_program(date_zile, zile_pe_rand):
     wb = Workbook()
     ws = wb.active
@@ -230,9 +220,6 @@ else:
 
         tab1, tab2, tab3, tab4 = st.tabs(["📅 Programul Final", "🤖 Generare Automată", "👥 Echipa", "➕ Adaugă Angajat"])
 
-        # ==========================================
-        # TAB 1: VIZUALIZARE PROGRAM GRUPAT (GRID) + EXCEL
-        # ==========================================
         with tab1:
             st.title("📅 Programul Întregii Săptămâni")
 
@@ -375,9 +362,7 @@ else:
             else:
                 st.info("Niciun program generat încă. Mergi la tab-ul 'Generare Automată' pentru a crea programul săptămânii.")
 
-        # ==========================================
-        # TAB 2: GENERARE AUTOMATĂ & GESTIONARE PREFERINȚE
-        # ==========================================
+
         with tab2:
             st.title("🤖 Generare Program Inteligent")
             col1, col2, col3 = st.columns(3)
@@ -387,7 +372,7 @@ else:
             mod_imax = col2.selectbox("Mod IMAX:", moduri)
             mod_cinema = col3.selectbox("Mod Cinema:", moduri)
 
-            # SINCRONIZAT CU APLICAȚIA ANGAJAȚILOR: Următoarea zi de Joi
+    
             azi = date.today()
             zile_pana_la_joi = (3 - azi.weekday()) % 7
             if zile_pana_la_joi == 0:
@@ -482,8 +467,7 @@ else:
                 """)
                 toti_angajatii = cursor.fetchall()
                 angajati_dict = {ang[0]: ang for ang in toti_angajatii}
-                # Calculăm câte departamente știe fiecare angajat (cei cu 1 singur departament sunt folosiți primii acolo,
-                # păstrându-i pe cei polivalenți disponibili pentru departamentele rare)
+
                 nr_abilitati = {
                     ang[0]: len([d for d in (ang[4] or "").split(",") if d.strip()])
                     for ang in toti_angajatii
@@ -514,7 +498,7 @@ else:
                     filtre_imax = "','".join(mapare_mod[mod_imax])
                     filtre_cinema = "','".join(mapare_mod[mod_cinema])
 
-                    # Alocăm mai întâi departamentele mai specializate (VIP, Cafe, Bilete) și apoi Bar / Plasatori
+
                     cursor.execute(f"""
                         SELECT id_necesar, departament, ora_start, ora_end, necesar_oameni, zona, mod_trafic 
                         FROM sabloane_necesar 
@@ -545,7 +529,7 @@ else:
                                 "id_alocat": None
                             })
 
-                    # Mulțimea angajaților care au primit deja o tură AZI (MAXIM 1 TURĂ PE ZI!)
+        
                     angajati_folositi_azi = set()
 
                     def aloca_angajat(slot, id_ales):
@@ -555,10 +539,7 @@ else:
                         if este_tura_seara(slot["ora_s"], slot["ora_e"]):
                             lucrat_seara_zi[data_curenta].add(id_ales)
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 1: Preferință EXACTĂ (dimineata / middle / seara)
-                    # Regulă: MAX 1 tură/zi + DOAR departamentul cunoscut + < 5 ture
-                    # ---------------------------------------------------------
+     
                     for slot in sloturi_zi:
                         if slot["id_alocat"] is not None:
                             continue
@@ -585,10 +566,7 @@ else:
                             ))
                             aloca_angajat(slot, candidati[0][0])
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 2: Angajați care au ales "oricand" în această zi
-                    # Regulă: MAX 1 tură/zi + DOAR departamentul cunoscut + < 5 ture
-                    # ---------------------------------------------------------
+           
                     for slot in sloturi_zi:
                         if slot["id_alocat"] is not None:
                             continue
@@ -615,11 +593,7 @@ else:
                             ))
                             aloca_angajat(slot, candidati[0][0])
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 3: Completare când nu sunt oameni pe tura exactă
-                    # Regulă: MAX 1 tură/zi + DOAR departamentul cunoscut + < 5 ture
-                    # Departajare: cei cu RATINGUL CEL MAI MIC primii
-                    # ---------------------------------------------------------
+        
                     for slot in sloturi_zi:
                         if slot["id_alocat"] is not None:
                             continue
@@ -652,10 +626,7 @@ else:
                             ))
                             aloca_angajat(slot, candidati[0][0][0])
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 4: Dacă toți din departament au >= 5 ture în săptămână,
-                    # permitem depășirea limitei săptămânale, DAR TOT MAXIM 1 TURĂ PE ZI!
-                    # ---------------------------------------------------------
+           
                     for slot in sloturi_zi:
                         if slot["id_alocat"] is not None:
                             continue
@@ -664,7 +635,7 @@ else:
                         for ang in toti_angajatii:
                             id_ang, deps = ang[0], ang[4]
                             if id_ang in angajati_folositi_azi:
-                                continue  # STRICT: Nu poate avea 2 ture în aceeași zi!
+                                continue  
                             if este_dim and id_ang in angajati_seara_ieri:
                                 continue
                             if not are_abilitate(slot["dep"], deps):
@@ -679,11 +650,7 @@ else:
                             ))
                             aloca_angajat(slot, candidati[0][0])
 
-                    # ---------------------------------------------------------
-                    # TREAPTA 5: ROCADĂ INTELIGENTĂ (FĂRĂ 2 TURE ÎN ACEEAȘI ZI!)
-                    # Dacă un slot a rămas gol pentru că angajatul calificat e pus pe alt
-                    # departament azi, căutăm un angajat LIBER AZI care îi poate lua locul
-                    # ---------------------------------------------------------
+         
                     for slot_gol in sloturi_zi:
                         if slot_gol["id_alocat"] is not None:
                             continue
@@ -695,19 +662,19 @@ else:
                                 continue
                             ang_ocupat = angajati_dict[id_ocupat]
 
-                            # Verificăm dacă angajatul deja alocat azi știe departamentul slotului gol
+                          
                             if not are_abilitate(slot_gol["dep"], ang_ocupat[4]):
                                 continue
                             if este_dim_gol and id_ocupat in angajati_seara_ieri:
                                 continue
 
-                            # Căutăm un înlocuitor care NU lucrează deloc azi și știe departamentul lui slot_ocupat
+                            
                             este_dim_ocupat = este_tura_dimineata(slot_ocupat["ora_s"])
                             inlocuitori = []
                             for ang_liber in toti_angajatii:
                                 id_liber, deps_liber = ang_liber[0], ang_liber[4]
                                 if id_liber in angajati_folositi_azi:
-                                    continue  # STRICT: Doar oameni care NU au tură azi
+                                    continue  
                                 if este_dim_ocupat and id_liber in angajati_seara_ieri:
                                     continue
                                 if not are_abilitate(slot_ocupat["dep"], deps_liber):
@@ -723,7 +690,7 @@ else:
                                 ))
                                 id_inlocuitor = inlocuitori[0][0]
 
-                                # Facem rocada: ang_ocupat trece pe slot_gol, iar id_inlocuitor preia slot_ocupat
+                                
                                 if este_tura_seara(slot_ocupat["ora_s"], slot_ocupat["ora_e"]):
                                     lucrat_seara_zi[data_curenta].discard(id_ocupat)
 
@@ -738,7 +705,7 @@ else:
                                     lucrat_seara_zi[data_curenta].add(id_inlocuitor)
                                 break
 
-                    # Salvăm toate sloturile zilei în baza de date
+                   
                     for slot in sloturi_zi:
                         cursor.execute(
                             "INSERT INTO program_final (id_angajat, data_zi, departament, ora_start, ora_end, mod_trafic) VALUES (%s, %s, %s, %s, %s, %s)",
@@ -750,9 +717,7 @@ else:
                 time.sleep(1.5)
                 st.rerun()
 
-        # ==========================================
-        # TAB 3: GESTIONARE ECHIPĂ & STATISTICI
-        # ==========================================
+   
         departamente_existente = ["Bar", "Plasator", "VIP", "Cafe", "Bilete"]
 
         with tab3:
@@ -858,9 +823,7 @@ else:
                             st.session_state.id_angajat_de_editat = None
                             st.rerun()
 
-        # ==========================================
-        # TAB 4: ADĂUGARE ANGAJAT
-        # ==========================================
+    
         with tab4:
             st.title("➕ Adaugă Angajat Nou")
             n_nume = st.text_input("Nume complet:")
